@@ -20,9 +20,16 @@ jobs:
           role-to-assume: arn:aws:iam::609607806531:role/aws-easy-github-actions
           aws-region: ap-southeast-2
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Package Lambda functions
         run: |
           cd templates/https-cert
+          pip install cryptography --target package --platform manylinux2014_x86_64 --only-binary=:all:
+          cd package && zip -r ../cert-lambda.zip . && cd ..
           zip cert-lambda.zip cert-lambda.py
 
       - name: Sync templates to S3
