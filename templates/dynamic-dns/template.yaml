@@ -1,0 +1,66 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: IAM credentials for dynamic DNS updates via Route 53
+
+Parameters:
+  HostedZoneId:
+    Type: String
+    Description: Route 53 Hosted Zone ID (e.g., Z1234567890ABC)
+    AllowedPattern: ^Z[A-Z0-9]+$
+    ConstraintDescription: Must be a valid Route 53 Hosted Zone ID starting with Z
+
+  RecordName:
+    Type: String
+    Description: DNS record to update (e.g., home.example.com)
+
+Resources:
+  DynamicDNSUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub '${AWS::StackName}-updater'
+
+  DynamicDNSPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: UpdateDNSRecord
+      Users:
+        - !Ref DynamicDNSUser
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowRecordUpdate
+            Effect: Allow
+            Action:
+              - route53:ChangeResourceRecordSets
+            Resource: !Sub 'arn:aws:route53:::hostedzone/${HostedZoneId}'
+            Condition:
+              ForAllValues:StringEquals:
+                route53:ChangeResourceRecordSetsNormalizedRecordNames:
+                  - !Ref RecordName
+                route53:ChangeResourceRecordSetsRecordTypes:
+                  - A
+                  - AAAA
+                route53:ChangeResourceRecordSetsActions:
+                  - UPSERT
+
+  DynamicDNSAccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref DynamicDNSUser
+
+Outputs:
+  AccessKeyId:
+    Description: Access Key ID for the update script
+    Value: !Ref DynamicDNSAccessKey
+
+  SecretAccessKey:
+    Description: Secret Access Key (save this - it won't be shown again)
+    Value: !GetAtt DynamicDNSAccessKey.SecretAccessKey
+
+  RecordName:
+    Description: DNS record this key can update
+    Value: !Ref RecordName
+
+  UpdateCommand:
+    Description: Example AWS CLI command to update the record
+    Value: !Sub |
+      aws route53 change-resource-record-sets --hosted-zone-id ${HostedZoneId} --change-batch '{"Changes":[{"Action":"UPSERT","ResourceRecordSet":{"Name":"${RecordName}","Type":"A","TTL":300,"ResourceRecords":[{"Value":"YOUR_IP"}]}}]}'
