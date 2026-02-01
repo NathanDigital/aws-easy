@@ -1,18 +1,32 @@
 # Dynamic DNS
 
-Update a Route 53 DNS record automatically when your home IP address changes.
+Update a Route 53 DNS record automatically when your home IP address changes. Just curl a URL.
 
 [![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/new?stackName=dynamic-dns&templateURL=https://raw.githubusercontent.com/NathanDigital/aws-easy/main/templates/dynamic-dns/template.yaml)
 
 ## What You Get
 
-- **IAM User**: Limited permissions to update only your specific DNS record
-- **Access Keys**: Credentials for your update script/device
+- **Lambda function**: Detects your IP and updates Route 53
+- **API Gateway**: HTTPS endpoint you can curl from anywhere
+- **Secret token**: Unique URL that only you know
 
 ## Prerequisites
 
-- A domain hosted in Route 53
-- Your Route 53 Hosted Zone ID (find it in the Route 53 console)
+- A domain you own (registered anywhere - Route 53, GoDaddy, Namecheap, etc.)
+- A Route 53 hosted zone for your domain
+
+### Setting up Route 53 (one-time)
+
+If you haven't already:
+
+1. Go to [Route 53 Hosted Zones](https://console.aws.amazon.com/route53/v2/hostedzones)
+2. Click "Create hosted zone"
+3. Enter your domain name (e.g., `example.com`)
+4. Copy the 4 nameservers from the NS record (e.g., `ns-123.awsdns-45.com`)
+5. Update your domain's nameservers at your registrar to use these
+6. Wait for DNS propagation (can take up to 48 hours, usually faster)
+
+Your **Hosted Zone ID** is shown in the hosted zone details (starts with `Z`).
 
 ## Parameters
 
@@ -21,59 +35,84 @@ Update a Route 53 DNS record automatically when your home IP address changes.
 | `HostedZoneId` | Yes | Your Route 53 Hosted Zone ID (e.g., `Z1234567890ABC`) |
 | `RecordName` | Yes | The DNS record to update (e.g., `home.example.com`) |
 
-## Steps
+A secure random token is generated automatically during deployment.
+
+## Setup
 
 1. Click the "Launch Stack" button above
 2. Enter your Hosted Zone ID and record name
-3. Click "Create stack"
-4. Go to the "Outputs" tab and copy the Access Key ID and Secret
+3. Check "I acknowledge that AWS CloudFormation might create IAM resources"
+4. Click "Create stack" and wait for completion
+5. Go to the "Outputs" tab
+6. Copy the `CronCommand` value
 
-## Update Script
+## Usage
 
-Run this script on your home server/router to update the DNS record:
+### One-time update
 
-```bash
-#!/bin/bash
-# Save as update-dns.sh
-
-ACCESS_KEY="YOUR_ACCESS_KEY_ID"
-SECRET_KEY="YOUR_SECRET_ACCESS_KEY"
-HOSTED_ZONE_ID="YOUR_HOSTED_ZONE_ID"
-RECORD_NAME="home.example.com"
-
-# Get current public IP
-IP=$(curl -s https://checkip.amazonaws.com)
-
-# Update Route 53
-AWS_ACCESS_KEY_ID=$ACCESS_KEY AWS_SECRET_ACCESS_KEY=$SECRET_KEY \
-aws route53 change-resource-record-sets \
-  --hosted-zone-id $HOSTED_ZONE_ID \
-  --change-batch '{
-    "Changes": [{
-      "Action": "UPSERT",
-      "ResourceRecordSet": {
-        "Name": "'"$RECORD_NAME"'",
-        "Type": "A",
-        "TTL": 300,
-        "ResourceRecords": [{"Value": "'"$IP"'"}]
-      }
-    }]
-  }'
-```
-
-Run via cron every 5 minutes:
+Just open the `UpdateUrl` from the Outputs tab in your browser, or:
 
 ```bash
-*/5 * * * * /path/to/update-dns.sh
+curl "https://xxxxx.execute-api.us-east-1.amazonaws.com/update/your-secret-token"
 ```
+
+Response:
+```json
+{"message": "DNS updated", "record": "home.example.com", "ip": "203.0.113.42"}
+```
+
+### Automatic updates (Linux/Mac)
+
+Add the cron line from the Outputs to your crontab:
+
+```bash
+crontab -e
+```
+
+Paste the `CronCommand` value:
+```
+*/5 * * * * curl -s "https://xxxxx.execute-api.us-east-1.amazonaws.com/update/your-secret-token"
+```
+
+### From a router (OpenWrt/GL.iNet)
+
+SSH into your router and add the cron job:
+
+```bash
+crontab -e
+# Add the CronCommand from your stack Outputs
+```
+
+## Security
+
+- Your update URL contains your secret token
+- Only requests with the correct token can update your DNS
+- All requests are over HTTPS
+
+**Keep your URL secret!** Anyone with the URL can update your DNS record.
 
 ## Costs
 
-- Route 53 Hosted Zone: $0.50/month
-- DNS queries: $0.40 per million queries
+With 5-minute updates (8,640 requests/month), excluding free tier:
+
+- **Lambda**: ~$0.01/month
+- **API Gateway**: ~$0.01/month
+- **Route 53**: $0.50/month per hosted zone
+
+**Total: ~$0.50/month**
 
 ## Cleanup
 
 ```bash
 aws cloudformation delete-stack --stack-name dynamic-dns
 ```
+
+## Troubleshooting
+
+**403 Forbidden**
+
+Your token is incorrect. Check the URL matches exactly what's in the Outputs tab.
+
+**DNS not updating**
+
+Check CloudWatch Logs for the Lambda function to see error details.

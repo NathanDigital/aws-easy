@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: IAM credentials for dynamic DNS updates via Route 53
+Description: Dynamic DNS updater with Lambda - just curl a URL to update your DNS
 
 Parameters:
   HostedZoneId:
@@ -13,54 +13,195 @@ Parameters:
     Description: DNS record to update (e.g., home.example.com)
 
 Resources:
-  DynamicDNSUser:
-    Type: AWS::IAM::User
+  # Generate a random auth token at deploy time
+  TokenGeneratorFunction:
+    Type: AWS::Lambda::Function
     Properties:
-      UserName: !Sub '${AWS::StackName}-updater'
+      FunctionName: !Sub '${AWS::StackName}-token-generator'
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 10
+      Role: !GetAtt TokenGeneratorRole.Arn
+      Code:
+        ZipFile: |
+          import cfnresponse
+          import secrets
 
-  DynamicDNSPolicy:
-    Type: AWS::IAM::Policy
+          def handler(event, context):
+              if event['RequestType'] == 'Create':
+                  token = secrets.token_urlsafe(24)
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {'Token': token})
+              elif event['RequestType'] == 'Update':
+                  # Keep the same token on updates
+                  old_token = event.get('OldResourceProperties', {}).get('Token', '')
+                  if old_token:
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {'Token': old_token})
+                  else:
+                      token = secrets.token_urlsafe(24)
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {'Token': token})
+              else:
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+
+  TokenGeneratorRole:
+    Type: AWS::IAM::Role
     Properties:
-      PolicyName: UpdateDNSRecord
-      Users:
-        - !Ref DynamicDNSUser
-      PolicyDocument:
+      AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Sid: AllowRecordUpdate
-            Effect: Allow
-            Action:
-              - route53:ChangeResourceRecordSets
-            Resource: !Sub 'arn:aws:route53:::hostedzone/${HostedZoneId}'
-            Condition:
-              ForAllValues:StringEquals:
-                route53:ChangeResourceRecordSetsNormalizedRecordNames:
-                  - !Ref RecordName
-                route53:ChangeResourceRecordSetsRecordTypes:
-                  - A
-                  - AAAA
-                route53:ChangeResourceRecordSetsActions:
-                  - UPSERT
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
-  DynamicDNSAccessKey:
-    Type: AWS::IAM::AccessKey
+  AuthToken:
+    Type: Custom::AuthToken
     Properties:
-      UserName: !Ref DynamicDNSUser
+      ServiceToken: !GetAtt TokenGeneratorFunction.Arn
+
+  # Lambda function to update DNS
+  UpdateFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-updater'
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 10
+      Role: !GetAtt LambdaRole.Arn
+      Environment:
+        Variables:
+          HOSTED_ZONE_ID: !Ref HostedZoneId
+          RECORD_NAME: !Ref RecordName
+          AUTH_TOKEN: !GetAtt AuthToken.Token
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import os
+
+          def handler(event, context):
+              # Get the token from the path
+              path_token = event.get('pathParameters', {}).get('token', '')
+
+              # Validate token
+              if path_token != os.environ['AUTH_TOKEN']:
+                  return {
+                      'statusCode': 403,
+                      'body': json.dumps({'error': 'Invalid token'})
+                  }
+
+              # Get caller's IP from API Gateway
+              source_ip = event['requestContext']['http']['sourceIp']
+
+              # Update Route 53
+              route53 = boto3.client('route53')
+              response = route53.change_resource_record_sets(
+                  HostedZoneId=os.environ['HOSTED_ZONE_ID'],
+                  ChangeBatch={
+                      'Changes': [{
+                          'Action': 'UPSERT',
+                          'ResourceRecordSet': {
+                              'Name': os.environ['RECORD_NAME'],
+                              'Type': 'A',
+                              'TTL': 300,
+                              'ResourceRecords': [{'Value': source_ip}]
+                          }
+                      }]
+                  }
+              )
+
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps({
+                      'message': 'DNS updated',
+                      'record': os.environ['RECORD_NAME'],
+                      'ip': source_ip
+                  })
+              }
+
+  # IAM role for Lambda
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: UpdateDNS
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: UpdateRoute53
+                Effect: Allow
+                Action: route53:ChangeResourceRecordSets
+                Resource: !Sub 'arn:aws:route53:::hostedzone/${HostedZoneId}'
+              - Sid: WriteLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+
+  # API Gateway HTTP API
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub '${AWS::StackName}-api'
+      ProtocolType: HTTP
+
+  # API Gateway stage
+  HttpApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: '$default'
+      AutoDeploy: true
+
+  # API Gateway route
+  HttpApiRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'GET /update/{token}'
+      Target: !Sub 'integrations/${HttpApiIntegration}'
+
+  # API Gateway integration with Lambda
+  HttpApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt UpdateFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  # Permission for API Gateway to invoke Lambda
+  LambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref UpdateFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*'
 
 Outputs:
-  AccessKeyId:
-    Description: Access Key ID for the update script
-    Value: !Ref DynamicDNSAccessKey
+  UpdateUrl:
+    Description: Your update URL (keep this secret!)
+    Value: !Sub
+      - 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/update/${Token}'
+      - Token: !GetAtt AuthToken.Token
 
-  SecretAccessKey:
-    Description: Secret Access Key (save this - it won't be shown again)
-    Value: !GetAtt DynamicDNSAccessKey.SecretAccessKey
+  CronCommand:
+    Description: Add this line to your crontab to update every 5 minutes
+    Value: !Sub
+      - '*/5 * * * * curl -s "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/update/${Token}"'
+      - Token: !GetAtt AuthToken.Token
 
   RecordName:
-    Description: DNS record this key can update
+    Description: DNS record being updated
     Value: !Ref RecordName
-
-  UpdateCommand:
-    Description: Example AWS CLI command to update the record
-    Value: !Sub |
-      aws route53 change-resource-record-sets --hosted-zone-id ${HostedZoneId} --change-batch '{"Changes":[{"Action":"UPSERT","ResourceRecordSet":{"Name":"${RecordName}","Type":"A","TTL":300,"ResourceRecords":[{"Value":"YOUR_IP"}]}}]}'
