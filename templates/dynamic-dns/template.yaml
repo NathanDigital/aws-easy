@@ -119,14 +119,15 @@ Resources:
 
           def handler(event, context):
               source_ip = event['requestContext']['http']['sourceIp']
-              path_token = event.get('pathParameters', {}).get('token', '')
+              auth_header = event.get('headers', {}).get('authorization', '')
 
               # Validate token
-              if path_token != os.environ['AUTH_TOKEN']:
+              expected = f"Bearer {os.environ['AUTH_TOKEN']}"
+              if auth_header != expected:
                   print(f"AUTH_FAILED ip={source_ip}")
                   return {
                       'statusCode': 403,
-                      'body': json.dumps({'error': 'Invalid token'})
+                      'body': json.dumps({'error': 'Invalid authorization'})
                   }
 
               route53 = boto3.client('route53')
@@ -268,7 +269,7 @@ Resources:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref HttpApi
-      RouteKey: 'GET /update/{token}'
+      RouteKey: 'GET /update'
       Target: !Sub 'integrations/${HttpApiIntegration}'
 
   # API Gateway integration with Lambda
@@ -291,15 +292,25 @@ Resources:
 
 Outputs:
   UpdateUrl:
-    Description: Your update URL (keep this secret!)
+    Description: Update endpoint URL
+    Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/update'
+
+  AuthHeader:
+    Description: Authorization header value (keep secret!)
     Value: !Sub
-      - 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/update/${Token}'
+      - 'Bearer ${Token}'
+      - Token: !GetAtt Setup.Token
+
+  CurlCommand:
+    Description: Command to update DNS
+    Value: !Sub
+      - 'curl -H "Authorization: Bearer ${Token}" https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/update'
       - Token: !GetAtt Setup.Token
 
   CronCommand:
     Description: Add this line to your crontab to update every 5 minutes
     Value: !Sub
-      - '*/5 * * * * curl -s "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/update/${Token}"'
+      - '*/5 * * * * curl -s -H "Authorization: Bearer ${Token}" https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/update'
       - Token: !GetAtt Setup.Token
 
   RecordName:

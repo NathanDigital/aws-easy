@@ -1,0 +1,287 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Auto-renewing Let's Encrypt HTTPS certificate with API download endpoint
+
+Parameters:
+  DomainName:
+    Type: String
+    Description: Domain name for the certificate (e.g., home.example.com)
+
+Resources:
+  # Setup: generate auth token and find hosted zone
+  SetupFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-setup'
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 10
+      Role: !GetAtt SetupRole.Arn
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: https-cert
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import secrets
+
+          def handler(event, context):
+              if event['RequestType'] == 'Delete':
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  return
+
+              # Generate or preserve token
+              if event['RequestType'] == 'Update':
+                  token = event.get('OldResourceProperties', {}).get('Token', '')
+                  if not token:
+                      token = secrets.token_urlsafe(24)
+              else:
+                  token = secrets.token_urlsafe(24)
+
+              # Find hosted zone
+              domain_name = event['ResourceProperties']['DomainName'].rstrip('.')
+              route53 = boto3.client('route53')
+
+              parts = domain_name.split('.')
+              for i in range(len(parts) - 1):
+                  domain = '.'.join(parts[i:]) + '.'
+                  zones = route53.list_hosted_zones_by_name(DNSName=domain, MaxItems='1')
+                  for zone in zones.get('HostedZones', []):
+                      if zone['Name'] == domain:
+                          zone_id = zone['Id'].replace('/hostedzone/', '')
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+                              'Token': token,
+                              'ZoneId': zone_id
+                          })
+                          return
+
+              cfnresponse.send(event, context, cfnresponse.FAILED, {}, reason=f'No hosted zone found for {domain_name}')
+
+  SetupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: https-cert
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ListHostedZones
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: route53:ListHostedZonesByName
+                Resource: '*'
+
+  Setup:
+    Type: Custom::Setup
+    Properties:
+      ServiceToken: !GetAtt SetupFunction.Arn
+      DomainName: !Ref DomainName
+
+  # Secret to store certificate and private key
+  CertSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${AWS::StackName}-certificate'
+      Description: !Sub 'Let''s Encrypt certificate for ${DomainName}'
+      SecretString: '{}'
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: https-cert
+
+  # IAM role for certificate Lambda
+  CertRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: https-cert
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CertificateManagement
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ManageTXTRecords
+                Effect: Allow
+                Action:
+                  - route53:ChangeResourceRecordSets
+                  - route53:ListResourceRecordSets
+                Resource: !Sub
+                  - 'arn:aws:route53:::hostedzone/${ZoneId}'
+                  - ZoneId: !GetAtt Setup.ZoneId
+                Condition:
+                  ForAllValues:StringEquals:
+                    route53:ChangeResourceRecordSetsRecordTypes:
+                      - TXT
+              - Sid: GetChange
+                Effect: Allow
+                Action:
+                  - route53:GetChange
+                Resource: 'arn:aws:route53:::change/*'
+              - Sid: CertSecretAccess
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                Resource: !Ref CertSecret
+              - Sid: WriteLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+
+  # Log group for certificate Lambda
+  CertFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-cert'
+      RetentionInDays: 7
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: https-cert
+
+  # Certificate Lambda function
+  CertFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: CertFunctionLogGroup
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-cert'
+      Runtime: python3.12
+      Handler: cert-lambda.handler
+      Timeout: 300
+      MemorySize: 256
+      Role: !GetAtt CertRole.Arn
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: https-cert
+      Environment:
+        Variables:
+          DOMAIN: !Ref DomainName
+          ZONE_ID: !GetAtt Setup.ZoneId
+          CERT_SECRET_ARN: !Ref CertSecret
+          CERT_TOKEN: !GetAtt Setup.Token
+      Code:
+        S3Bucket: aws-easy-templates
+        S3Key: templates/https-cert/cert-lambda.zip
+
+  # EventBridge rule for certificate renewal (every 60 days)
+  CertSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${AWS::StackName}-renewal'
+      Description: Renew Let's Encrypt certificate every 60 days
+      ScheduleExpression: 'rate(60 days)'
+      State: ENABLED
+      Targets:
+        - Id: CertFunction
+          Arn: !GetAtt CertFunction.Arn
+
+  # Permission for EventBridge to invoke certificate Lambda
+  CertSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CertFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt CertSchedule.Arn
+
+  # Custom resource to trigger initial certificate generation
+  InitialCertTrigger:
+    Type: Custom::CertGeneration
+    Properties:
+      ServiceToken: !GetAtt CertFunction.Arn
+
+  # API Gateway HTTP API
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub '${AWS::StackName}-api'
+      ProtocolType: HTTP
+      Tags:
+        Project: aws-easy
+        Template: https-cert
+
+  # API Gateway stage
+  HttpApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: '$default'
+      AutoDeploy: true
+
+  # API Gateway route for certificate download
+  CertApiRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'GET /cert'
+      Target: !Sub 'integrations/${CertApiIntegration}'
+
+  # API Gateway integration for certificate Lambda
+  CertApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt CertFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  # Permission for API Gateway to invoke certificate Lambda
+  CertLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CertFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*'
+
+Outputs:
+  DomainName:
+    Description: Domain name for the certificate
+    Value: !Ref DomainName
+
+  CertUrl:
+    Description: Certificate download URL (use with Authorization header)
+    Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/cert'
+
+  CertAuthHeader:
+    Description: Authorization header value (keep secret!)
+    Value: !Sub
+      - 'Bearer ${Token}'
+      - Token: !GetAtt Setup.Token
+
+  CurlCommand:
+    Description: Command to download certificate
+    Value: !Sub
+      - 'curl -H "Authorization: Bearer ${Token}" https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/cert'
+      - Token: !GetAtt Setup.Token

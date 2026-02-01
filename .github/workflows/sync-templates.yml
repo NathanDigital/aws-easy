@@ -20,5 +20,10 @@ jobs:
           role-to-assume: arn:aws:iam::609607806531:role/aws-easy-github-actions
           aws-region: ap-southeast-2
 
+      - name: Package Lambda functions
+        run: |
+          cd templates/https-cert
+          zip cert-lambda.zip cert-lambda.py
+
       - name: Sync templates to S3
-        run: aws s3 sync templates/ s3://aws-easy-templates/templates/ --exclude "*/README.md" --delete
+        run: aws s3 sync templates/ s3://aws-easy-templates/templates/ --exclude "*/README.md" --exclude "*.py" --delete
