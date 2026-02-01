@@ -2,7 +2,7 @@
 
 Update a Route 53 DNS record automatically when your home IP address changes. Just curl a URL.
 
-[![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/new?stackName=dynamic-dns&templateURL=https://aws-easy-templates.s3.ap-southeast-2.amazonaws.com/templates/dynamic-dns/template.yaml)
+[![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateURL=https://aws-easy-templates.s3.ap-southeast-2.amazonaws.com/templates/dynamic-dns/template.yaml&stackName=dynamic-dns&capabilities=CAPABILITY_IAM)
 
 ## What You Get
 
@@ -40,13 +40,11 @@ The hosted zone is detected automatically from your domain. A secure random toke
 
 1. Click the "Launch Stack" button above
 2. Enter your DNS record (e.g., `home.example.com`)
-3. Click **Next**
-4. Click **Next** again (defaults are fine)
-5. Check "I acknowledge that AWS CloudFormation might create IAM resources"
-6. Click **Submit**
-7. Wait for status to show `CREATE_COMPLETE` (2-3 mins)
-8. Click the **Outputs** tab
-9. Copy the `CronCommand` value
+3. Check "I acknowledge..." at the bottom
+4. Click **Create stack**
+5. Wait for status to show `CREATE_COMPLETE` (2-3 mins)
+6. Click the **Outputs** tab
+7. Copy the `CronCommand` value
 
 ## Usage
 

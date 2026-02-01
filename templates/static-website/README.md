@@ -2,7 +2,7 @@
 
 Host a static website (HTML, CSS, JavaScript) on AWS with HTTPS.
 
-[![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/new?stackName=static-website&templateURL=https://aws-easy-templates.s3.ap-southeast-2.amazonaws.com/templates/static-website/template.yaml)
+[![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateURL=https://aws-easy-templates.s3.ap-southeast-2.amazonaws.com/templates/static-website/template.yaml&stackName=static-website)
 
 ## What You Get
 
@@ -20,12 +20,10 @@ Host a static website (HTML, CSS, JavaScript) on AWS with HTTPS.
 1. Click the "Launch Stack" button above
 2. Log into AWS if prompted
 3. Optionally enter a custom domain, or leave blank
-4. Click **Next**
-5. Click **Next** again (defaults are fine)
-6. Click **Submit**
-7. Wait for status to show `CREATE_COMPLETE` (5-10 mins)
-8. Click the **Outputs** tab
-9. Copy the `WebsiteURL` and `BucketName`
+4. Click **Create stack**
+5. Wait for status to show `CREATE_COMPLETE` (5-10 mins)
+6. Click the **Outputs** tab
+7. Copy the `WebsiteURL` and `BucketName`
 
 ## Upload Your Files
 
