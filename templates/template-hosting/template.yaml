@@ -69,6 +69,7 @@ Resources:
                 Resource: !GetAtt TemplatesBucket.Arn
   TemplatesBucket:
     Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
     Properties:
       BucketName: aws-easy-templates
       Tags:

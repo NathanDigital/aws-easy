@@ -39,11 +39,14 @@ The hosted zone is detected automatically from your domain. A secure random toke
 ## Setup
 
 1. Click the "Launch Stack" button above
-2. Enter your Hosted Zone ID and record name
-3. Check "I acknowledge that AWS CloudFormation might create IAM resources"
-4. Click "Create stack" and wait for completion
-5. Go to the "Outputs" tab
-6. Copy the `CronCommand` value
+2. Enter your DNS record (e.g., `home.example.com`)
+3. Click **Next**
+4. Click **Next** again (defaults are fine)
+5. Check "I acknowledge that AWS CloudFormation might create IAM resources"
+6. Click **Submit**
+7. Wait for status to show `CREATE_COMPLETE` (2-3 mins)
+8. Click the **Outputs** tab
+9. Copy the `CronCommand` value
 
 ## Usage
 

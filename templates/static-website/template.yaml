@@ -13,6 +13,7 @@ Conditions:
 Resources:
   WebsiteBucket:
     Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
     Properties:
       Tags:
         - Key: Project

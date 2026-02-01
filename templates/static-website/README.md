@@ -19,10 +19,13 @@ Host a static website (HTML, CSS, JavaScript) on AWS with HTTPS.
 
 1. Click the "Launch Stack" button above
 2. Log into AWS if prompted
-3. Fill in the parameters and click "Create stack"
-4. Wait for the stack to complete (5-10 mins)
-5. Find your website URL in the "Outputs" tab
-6. Upload your files to the S3 bucket
+3. Optionally enter a custom domain, or leave blank
+4. Click **Next**
+5. Click **Next** again (defaults are fine)
+6. Click **Submit**
+7. Wait for status to show `CREATE_COMPLETE` (5-10 mins)
+8. Click the **Outputs** tab
+9. Copy the `WebsiteURL` and `BucketName`
 
 ## Upload Your Files
 
