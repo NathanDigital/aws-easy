@@ -229,6 +229,14 @@ Resources:
                 Resource: !Sub
                   - 'arn:aws:route53:::hostedzone/${ZoneId}'
                   - ZoneId: !GetAtt Setup.ZoneId
+                Condition:
+                  ForAllValues:StringEquals:
+                    route53:ChangeResourceRecordSetsNormalizedRecordNames:
+                      - !Ref RecordName
+                    route53:ChangeResourceRecordSetsRecordTypes:
+                      - A
+                    route53:ChangeResourceRecordSetsActions:
+                      - UPSERT
               - Sid: WriteLogs
                 Effect: Allow
                 Action:
