@@ -2,7 +2,7 @@
 
 Update a Route 53 DNS record automatically when your home IP address changes. Just curl a URL.
 
-[![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/new?stackName=dynamic-dns&templateURL=https://raw.githubusercontent.com/NathanDigital/aws-easy/main/templates/dynamic-dns/template.yaml)
+[![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/new?stackName=dynamic-dns&templateURL=https://aws-easy-templates.s3.ap-southeast-2.amazonaws.com/templates/dynamic-dns/template.yaml)
 
 ## What You Get
 

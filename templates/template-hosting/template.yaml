@@ -1,0 +1,111 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: S3 bucket for hosting aws-easy CloudFormation templates (project infrastructure)
+
+Parameters:
+  GitHubOrg:
+    Type: String
+    Default: NathanDigital
+    Description: GitHub organization or username
+
+  GitHubRepo:
+    Type: String
+    Default: aws-easy
+    Description: GitHub repository name
+
+Resources:
+  # OIDC provider for GitHub Actions
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: template-hosting
+
+  # IAM role for GitHub Actions to assume
+  GitHubActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: aws-easy-github-actions
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: template-hosting
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOIDCProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringEquals:
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubRepo}:ref:refs/heads/main'
+      Policies:
+        - PolicyName: SyncTemplatesToS3
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: WriteToTemplatesBucket
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub '${TemplatesBucket.Arn}/*'
+              - Sid: ListBucket
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt TemplatesBucket.Arn
+  TemplatesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: aws-easy-templates
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: template-hosting
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      VersioningConfiguration:
+        Status: Enabled
+
+  TemplatesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TemplatesBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PublicReadForTemplates
+            Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub '${TemplatesBucket.Arn}/*'
+
+Outputs:
+  BucketName:
+    Description: S3 bucket name
+    Value: !Ref TemplatesBucket
+
+  BucketUrl:
+    Description: Base URL for templates
+    Value: !Sub 'https://${TemplatesBucket}.s3.${AWS::Region}.amazonaws.com'
+
+  GitHubActionsRoleArn:
+    Description: IAM role ARN for GitHub Actions (use in workflow)
+    Value: !GetAtt GitHubActionsRole.Arn
