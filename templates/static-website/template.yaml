@@ -14,6 +14,11 @@ Resources:
   WebsiteBucket:
     Type: AWS::S3::Bucket
     Properties:
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: static-website
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -48,6 +53,11 @@ Resources:
   CloudFrontDistribution:
     Type: AWS::CloudFront::Distribution
     Properties:
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: static-website
       DistributionConfig:
         Enabled: true
         DefaultRootObject: index.html

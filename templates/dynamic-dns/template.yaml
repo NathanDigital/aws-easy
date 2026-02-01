@@ -22,6 +22,11 @@ Resources:
       Handler: index.handler
       Timeout: 10
       Role: !GetAtt TokenGeneratorRole.Arn
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: dynamic-dns
       Code:
         ZipFile: |
           import cfnresponse
@@ -45,6 +50,11 @@ Resources:
   TokenGeneratorRole:
     Type: AWS::IAM::Role
     Properties:
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: dynamic-dns
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -70,6 +80,11 @@ Resources:
       Handler: index.handler
       Timeout: 10
       Role: !GetAtt LambdaRole.Arn
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: dynamic-dns
       Environment:
         Variables:
           HOSTED_ZONE_ID: !Ref HostedZoneId
@@ -158,11 +173,21 @@ Resources:
     Properties:
       LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-updater'
       RetentionInDays: 7
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: dynamic-dns
 
   # IAM role for Lambda
   LambdaRole:
     Type: AWS::IAM::Role
     Properties:
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: dynamic-dns
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -195,6 +220,9 @@ Resources:
     Properties:
       Name: !Sub '${AWS::StackName}-api'
       ProtocolType: HTTP
+      Tags:
+        Project: aws-easy
+        Template: dynamic-dns
 
   # API Gateway stage
   HttpApiStage:
