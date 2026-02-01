@@ -32,10 +32,9 @@ Your **Hosted Zone ID** is shown in the hosted zone details (starts with `Z`).
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `HostedZoneId` | Yes | Your Route 53 Hosted Zone ID (e.g., `Z1234567890ABC`) |
-| `RecordName` | Yes | The DNS record to update (e.g., `home.example.com`) |
+| `RecordName` | Yes | The full DNS record to update (e.g., `home.example.com`) |
 
-A secure random token is generated automatically during deployment.
+The hosted zone is detected automatically from your domain. A secure random token is generated during deployment.
 
 ## Setup
 
