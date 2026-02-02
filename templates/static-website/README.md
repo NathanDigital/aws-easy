@@ -2,7 +2,7 @@
 
 Host a static website (HTML, CSS, JavaScript) on AWS with HTTPS.
 
-<a href="https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateURL=https://aws-easy-templates.s3.ap-southeast-2.amazonaws.com/templates/static-website/template.yaml&stackName=static-website" target="_blank"><img src="https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png" alt="Launch Stack"></a>
+<a href="https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateURL=https://aws-easy-templates.s3.ap-southeast-2.amazonaws.com/templates/static-website/template.yaml&stackName=static-website&capabilities=CAPABILITY_IAM" target="_blank"><img src="https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png" alt="Launch Stack"></a>
 
 ## What You Get
 
@@ -20,10 +20,11 @@ Host a static website (HTML, CSS, JavaScript) on AWS with HTTPS.
 1. Click the "Launch Stack" button above
 2. Log into AWS if prompted
 3. Optionally enter a custom domain, or leave blank
-4. Click **Create stack**
-5. Wait for status to show `CREATE_COMPLETE` (5-10 mins)
-6. Click the **Outputs** tab
-7. Copy the `WebsiteURL` and `BucketName`
+4. Check "I acknowledge..." at the bottom
+5. Click **Create stack**
+6. Wait for status to show `CREATE_COMPLETE` (5-10 mins)
+7. Click the **Outputs** tab
+8. Copy the `WebsiteURL` and `BucketName`
 
 ## Upload Your Files
 
@@ -41,7 +42,7 @@ A small personal website typically costs less than $1/month.
 
 To delete and stop charges:
 
-```bash
-aws s3 rm s3://YOUR-BUCKET-NAME --recursive
-aws cloudformation delete-stack --stack-name static-website
-```
+1. Go to [CloudFormation Stacks](https://console.aws.amazon.com/cloudformation/home#/stacks)
+2. Select your stack and click **Delete**
+
+Your website files will be deleted automatically.

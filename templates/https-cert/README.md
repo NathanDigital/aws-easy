@@ -155,11 +155,10 @@ Excluding free tier:
 
 ## Cleanup
 
-```bash
-aws cloudformation delete-stack --stack-name https-cert
-```
+To delete and stop charges:
 
-Note: The Secrets Manager secret is deleted with the stack.
+1. Go to [CloudFormation Stacks](https://console.aws.amazon.com/cloudformation/home#/stacks)
+2. Select your stack and click **Delete**
 
 ## Troubleshooting
 

@@ -101,9 +101,10 @@ With 5-minute updates (8,640 requests/month), excluding free tier:
 
 ## Cleanup
 
-```bash
-aws cloudformation delete-stack --stack-name dynamic-dns
-```
+To delete and stop charges:
+
+1. Go to [CloudFormation Stacks](https://console.aws.amazon.com/cloudformation/home#/stacks)
+2. Select your stack and click **Delete**
 
 ## Troubleshooting
 

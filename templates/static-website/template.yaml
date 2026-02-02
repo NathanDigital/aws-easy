@@ -11,9 +11,81 @@ Conditions:
   HasDomain: !Not [!Equals [!Ref DomainName, '']]
 
 Resources:
+  # Cleanup function to empty bucket on stack deletion
+  CleanupFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-cleanup'
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 300
+      Role: !GetAtt CleanupRole.Arn
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: static-website
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+
+          def handler(event, context):
+              if event['RequestType'] != 'Delete':
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  return
+
+              bucket = event['ResourceProperties']['BucketName']
+              s3 = boto3.resource('s3')
+
+              try:
+                  s3.Bucket(bucket).objects.all().delete()
+                  s3.Bucket(bucket).object_versions.all().delete()
+              except Exception as e:
+                  print(f'Error emptying bucket: {e}')
+
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+
+  CleanupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: static-website
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: EmptyBucket
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                  - s3:ListBucket
+                  - s3:ListBucketVersions
+                Resource:
+                  - !Sub 'arn:aws:s3:::${WebsiteBucket}'
+                  - !Sub 'arn:aws:s3:::${WebsiteBucket}/*'
+
+  BucketCleanup:
+    Type: Custom::BucketCleanup
+    Properties:
+      ServiceToken: !GetAtt CleanupFunction.Arn
+      BucketName: !Ref WebsiteBucket
+
   WebsiteBucket:
     Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
     Properties:
       Tags:
         - Key: Project
