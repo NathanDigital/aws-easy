@@ -1,1 +1,17 @@
+# Project
 CLAUDE.md
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# Environment/secrets
+.env
+.env.*
+
+# Build artifacts
+*.zip
