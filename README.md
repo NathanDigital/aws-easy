@@ -26,6 +26,26 @@ Update Route 53 DNS records automatically from your home network.
 
 [Read the guide →](templates/dynamic-dns/)
 
+---
+
+### Contact Form
+
+Add a contact form to your static website. Submissions sent to your email via SES.
+
+<a href="https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateURL=https://aws-easy-templates.s3.ap-southeast-2.amazonaws.com/templates/contact-form/template.yaml&stackName=contact-form&capabilities=CAPABILITY_IAM" target="_blank"><img src="https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png" alt="Launch Stack"></a>
+
+[Read the guide →](templates/contact-form/)
+
+---
+
+### MQTT IoT
+
+Connect your local MQTT broker to AWS IoT Core for remote monitoring.
+
+<a href="https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateURL=https://aws-easy-templates.s3.ap-southeast-2.amazonaws.com/templates/mqtt-iot/template.yaml&stackName=mqtt-iot&capabilities=CAPABILITY_IAM" target="_blank"><img src="https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png" alt="Launch Stack"></a>
+
+[Read the guide →](templates/mqtt-iot/)
+
 ## Contributing
 
 Contributions welcome! Please:

@@ -1,0 +1,289 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: MQTT IoT - connect your local MQTT broker to AWS IoT Core for remote monitoring
+
+Parameters:
+  TopicPrefix:
+    Type: String
+    Default: sensors
+    Description: MQTT topic namespace (e.g., sensors, boat, home)
+    AllowedPattern: '[a-zA-Z0-9_/]+'
+    ConstraintDescription: Only letters, numbers, underscores, and forward slashes
+
+Resources:
+  # S3 bucket for certificate storage
+  CertBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-certs-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: mqtt-iot
+
+  # IoT policy for bridge (publish-only)
+  BridgePolicy:
+    Type: AWS::IoT::Policy
+    Properties:
+      PolicyName: !Sub '${AWS::StackName}-bridge'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: iot:Connect
+            Resource: !Sub 'arn:aws:iot:${AWS::Region}:${AWS::AccountId}:client/*'
+          - Effect: Allow
+            Action: iot:Publish
+            Resource: !Sub 'arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/${TopicPrefix}/*'
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: mqtt-iot
+
+  # IoT policy for viewer (subscribe/receive only)
+  ViewerPolicy:
+    Type: AWS::IoT::Policy
+    Properties:
+      PolicyName: !Sub '${AWS::StackName}-viewer'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: iot:Connect
+            Resource: !Sub 'arn:aws:iot:${AWS::Region}:${AWS::AccountId}:client/*'
+          - Effect: Allow
+            Action: iot:Subscribe
+            Resource: !Sub 'arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topicfilter/${TopicPrefix}/#'
+          - Effect: Allow
+            Action: iot:Receive
+            Resource: !Sub 'arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/${TopicPrefix}/*'
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: mqtt-iot
+
+  # IAM role for setup Lambda
+  SetupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: mqtt-iot
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SetupMqttBridge
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: IoTCertificates
+                Effect: Allow
+                Action:
+                  - iot:CreateKeysAndCertificate
+                  - iot:DeleteCertificate
+                  - iot:UpdateCertificate
+                  - iot:AttachPolicy
+                  - iot:DetachPolicy
+                  - iot:ListTargetsForPolicy
+                  - iot:DescribeEndpoint
+                Resource: '*'
+              - Sid: S3Access
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt CertBucket.Arn
+                  - !Sub '${CertBucket.Arn}/*'
+              - Sid: WriteLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+
+  # Log group for setup Lambda
+  SetupFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-setup'
+      RetentionInDays: 7
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: mqtt-iot
+
+  # Setup Lambda: create certs, generate config, upload to S3
+  SetupFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: SetupFunctionLogGroup
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-setup'
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 30
+      Role: !GetAtt SetupRole.Arn
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: mqtt-iot
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import urllib.request
+          import json
+
+          ROOT_CA_URL = 'https://www.amazontrust.com/repository/AmazonRootCA1.pem'
+
+          def handler(event, context):
+              try:
+                  iot = boto3.client('iot')
+                  s3 = boto3.client('s3')
+                  bucket = event['ResourceProperties']['BucketName']
+                  topic_prefix = event['ResourceProperties']['TopicPrefix']
+                  bridge_policy = event['ResourceProperties']['BridgePolicy']
+                  viewer_policy = event['ResourceProperties']['ViewerPolicy']
+
+                  if event['RequestType'] == 'Delete':
+                      delete_resources(iot, s3, bucket, bridge_policy, viewer_policy)
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return
+
+                  if event['RequestType'] == 'Update':
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+                          'Endpoint': get_endpoint(iot),
+                      })
+                      return
+
+                  # Create: generate certs and config
+                  endpoint = get_endpoint(iot)
+                  root_ca = urllib.request.urlopen(ROOT_CA_URL).read().decode()
+
+                  # Create bridge certificate (publish-only)
+                  bridge_cert = iot.create_keys_and_certificate(setAsActive=True)
+                  iot.attach_policy(policyName=bridge_policy, target=bridge_cert['certificateArn'])
+
+                  # Create viewer certificate (subscribe-only)
+                  viewer_cert = iot.create_keys_and_certificate(setAsActive=True)
+                  iot.attach_policy(policyName=viewer_policy, target=viewer_cert['certificateArn'])
+
+                  # Generate Mosquitto bridge config
+                  bridge_conf = generate_bridge_conf(endpoint, topic_prefix)
+
+                  # Upload bridge files to S3
+                  upload_to_s3(s3, bucket, 'bridge', bridge_cert, root_ca, bridge_conf)
+
+                  # Upload viewer files to S3
+                  upload_to_s3(s3, bucket, 'viewer', viewer_cert, root_ca)
+
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+                      'Endpoint': endpoint,
+                      'BridgeCertArn': bridge_cert['certificateArn'],
+                      'ViewerCertArn': viewer_cert['certificateArn'],
+                      'BridgeConf': bridge_conf,
+                  })
+              except Exception as e:
+                  print(f'Error: {e}')
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {}, reason=str(e))
+
+          def get_endpoint(iot):
+              return iot.describe_endpoint(endpointType='iot:Data-ATS')['endpointAddress']
+
+          def generate_bridge_conf(endpoint, topic_prefix):
+              return f"""# Mosquitto bridge to AWS IoT Core
+          # Copy this file to /etc/mosquitto/conf.d/aws-bridge.conf
+          # Place cert files in /etc/mosquitto/certs/
+
+          connection aws-iot
+          address {endpoint}:8883
+          bridge_cafile /etc/mosquitto/certs/root-ca.pem
+          bridge_certfile /etc/mosquitto/certs/cert.pem
+          bridge_keyfile /etc/mosquitto/certs/private.key
+
+          topic {topic_prefix}/# out 1
+          try_private false
+          notifications false
+          bridge_protocol_version mqttv311
+          """
+
+          def upload_to_s3(s3, bucket, prefix, cert_data, root_ca, bridge_conf=None):
+              s3.put_object(Bucket=bucket, Key=f'{prefix}/cert.pem', Body=cert_data['certificatePem'])
+              s3.put_object(Bucket=bucket, Key=f'{prefix}/private.key', Body=cert_data['keyPair']['PrivateKey'])
+              s3.put_object(Bucket=bucket, Key=f'{prefix}/root-ca.pem', Body=root_ca)
+              if bridge_conf:
+                  s3.put_object(Bucket=bucket, Key=f'{prefix}/bridge.conf', Body=bridge_conf)
+
+          def delete_resources(iot, s3, bucket, bridge_policy, viewer_policy):
+              # Detach and delete certificates for both policies
+              for policy_name in [bridge_policy, viewer_policy]:
+                  try:
+                      targets = iot.list_targets_for_policy(policyName=policy_name)
+                      for target in targets.get('targets', []):
+                          iot.detach_policy(policyName=policy_name, target=target)
+                          # Extract cert ID from ARN
+                          cert_id = target.split('/')[-1]
+                          try:
+                              iot.update_certificate(certificateId=cert_id, newStatus='INACTIVE')
+                              iot.delete_certificate(certificateId=cert_id, forceDelete=True)
+                          except Exception as e:
+                              print(f'Error deleting cert {cert_id}: {e}')
+                  except Exception as e:
+                      print(f'Error cleaning up policy {policy_name}: {e}')
+
+              # Empty S3 bucket
+              try:
+                  objects = s3.list_objects_v2(Bucket=bucket)
+                  for obj in objects.get('Contents', []):
+                      s3.delete_object(Bucket=bucket, Key=obj['Key'])
+              except Exception as e:
+                  print(f'Error emptying bucket: {e}')
+
+  # Custom resource to trigger setup
+  Setup:
+    Type: Custom::Setup
+    Properties:
+      ServiceToken: !GetAtt SetupFunction.Arn
+      BucketName: !Ref CertBucket
+      TopicPrefix: !Ref TopicPrefix
+      BridgePolicy: !Ref BridgePolicy
+      ViewerPolicy: !Ref ViewerPolicy
+
+Outputs:
+  IoTEndpoint:
+    Description: AWS IoT Core MQTT endpoint
+    Value: !GetAtt Setup.Endpoint
+
+  TopicPrefix:
+    Description: MQTT topic prefix
+    Value: !Ref TopicPrefix
+
+  BridgeCertsLocation:
+    Description: S3 console link to bridge certificates
+    Value: !Sub 'https://s3.console.aws.amazon.com/s3/buckets/${CertBucket}?prefix=bridge/'
+
+  ViewerCertsLocation:
+    Description: S3 console link to viewer certificates
+    Value: !Sub 'https://s3.console.aws.amazon.com/s3/buckets/${CertBucket}?prefix=viewer/'
+
+  MosquittoBridgeConfig:
+    Description: Ready-to-use Mosquitto bridge configuration
+    Value: !GetAtt Setup.BridgeConf

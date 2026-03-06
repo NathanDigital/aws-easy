@@ -1,0 +1,337 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Contact form API - receive form submissions via email using SES
+
+Parameters:
+  RecipientEmail:
+    Type: String
+    Description: Email address to receive form submissions (must be verified)
+
+Resources:
+  # Setup: generate auth token and send SES verification email
+  SetupFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-setup'
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 10
+      Role: !GetAtt SetupRole.Arn
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: contact-form
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import secrets
+
+          def handler(event, context):
+              if event['RequestType'] == 'Delete':
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  return
+
+              # Generate or preserve token
+              if event['RequestType'] == 'Update':
+                  token = event.get('OldResourceProperties', {}).get('Token', '')
+                  if not token:
+                      token = secrets.token_urlsafe(24)
+              else:
+                  token = secrets.token_urlsafe(24)
+
+              email = event['ResourceProperties']['RecipientEmail']
+
+              # Send verification email (idempotent - won't resend if already verified)
+              ses = boto3.client('ses')
+              try:
+                  ses.verify_email_identity(EmailAddress=email)
+              except Exception as e:
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {},
+                      reason=f'Failed to send verification email: {e}')
+                  return
+
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, {'Token': token})
+
+  SetupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: contact-form
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: VerifyEmail
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ses:VerifyEmailIdentity
+                Resource: '*'
+
+  Setup:
+    Type: Custom::Setup
+    Properties:
+      ServiceToken: !GetAtt SetupFunction.Arn
+      RecipientEmail: !Ref RecipientEmail
+
+  # Lambda function to handle form submissions
+  FormFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: FormFunctionLogGroup
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-form'
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 10
+      Role: !GetAtt FormRole.Arn
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: contact-form
+      Environment:
+        Variables:
+          RECIPIENT_EMAIL: !Ref RecipientEmail
+          AUTH_TOKEN: !GetAtt Setup.Token
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import os
+          from botocore.exceptions import ClientError
+
+          def cors_response(status_code, body):
+              return {
+                  'statusCode': status_code,
+                  'headers': {
+                      'Content-Type': 'application/json',
+                      'Access-Control-Allow-Origin': '*',
+                      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+                      'Access-Control-Allow-Methods': 'POST, OPTIONS'
+                  },
+                  'body': json.dumps(body)
+              }
+
+          def handler(event, context):
+              # Handle CORS preflight
+              method = event.get('requestContext', {}).get('http', {}).get('method', '')
+              if method == 'OPTIONS':
+                  return cors_response(200, {})
+
+              # Validate auth token
+              auth_header = event.get('headers', {}).get('authorization', '')
+              expected = f"Bearer {os.environ['AUTH_TOKEN']}"
+              if auth_header != expected:
+                  return cors_response(403, {'error': 'Unauthorized'})
+
+              # Parse body
+              try:
+                  body = json.loads(event.get('body', '{}'))
+              except json.JSONDecodeError:
+                  return cors_response(400, {'error': 'Invalid JSON'})
+
+              email = body.get('email', '').strip()
+              message = body.get('message', '').strip()
+              honeypot = body.get('website', '')  # Honeypot field - should be empty
+
+              # Spam check - if honeypot is filled, fake success
+              if honeypot:
+                  return cors_response(200, {'message': 'Sent'})
+
+              # Validate required fields
+              if not email or not message:
+                  return cors_response(400, {'error': 'Email and message required'})
+
+              # Send via SES
+              ses = boto3.client('ses')
+              recipient = os.environ['RECIPIENT_EMAIL']
+
+              try:
+                  ses.send_email(
+                      Source=recipient,
+                      Destination={'ToAddresses': [recipient]},
+                      ReplyToAddresses=[email],
+                      Message={
+                          'Subject': {'Data': f'Contact form submission from {email}'},
+                          'Body': {'Text': {'Data': f'From: {email}\n\n{message}'}}
+                      }
+                  )
+              except ClientError as e:
+                  error_msg = str(e).lower()
+                  if 'not verified' in error_msg:
+                      return cors_response(503, {'error': 'Email not yet verified. Check your inbox for the verification link.'})
+                  print(f"SES_ERROR: {e}")
+                  return cors_response(500, {'error': 'Failed to send email'})
+
+              return cors_response(200, {'message': 'Sent'})
+
+  # Log group with retention
+  FormFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-form'
+      RetentionInDays: 14
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: contact-form
+
+  # IAM role for form Lambda
+  FormRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Tags:
+        - Key: Project
+          Value: aws-easy
+        - Key: Template
+          Value: contact-form
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SendEmail
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: SendSES
+                Effect: Allow
+                Action: ses:SendEmail
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    ses:FromAddress: !Ref RecipientEmail
+              - Sid: WriteLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+
+  # API Gateway HTTP API with CORS
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub '${AWS::StackName}-api'
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+        AllowMethods:
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+      Tags:
+        Project: aws-easy
+        Template: contact-form
+
+  # API Gateway stage
+  HttpApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: '$default'
+      AutoDeploy: true
+
+  # API Gateway route for POST
+  HttpApiRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'POST /submit'
+      Target: !Sub 'integrations/${HttpApiIntegration}'
+
+  # API Gateway route for OPTIONS (CORS preflight)
+  HttpApiOptionsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'OPTIONS /submit'
+      Target: !Sub 'integrations/${HttpApiIntegration}'
+
+  # API Gateway integration with Lambda
+  HttpApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt FormFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  # Permission for API Gateway to invoke Lambda
+  LambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref FormFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*'
+
+Outputs:
+  FormUrl:
+    Description: Form submission endpoint URL
+    Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/submit'
+
+  AuthToken:
+    Description: Bearer token for authentication (keep secret!)
+    Value: !GetAtt Setup.Token
+
+  CurlCommand:
+    Description: Test command
+    Value: !Sub
+      - |
+        curl -X POST "${Url}" -H "Authorization: Bearer ${Token}" -H "Content-Type: application/json" -d '{"email":"test@example.com","message":"Hello!"}'
+      - Url: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/submit'
+        Token: !GetAtt Setup.Token
+
+  ExampleHtml:
+    Description: Example HTML form
+    Value: !Sub
+      - |
+        <form id="contact-form">
+          <input type="email" name="email" placeholder="Your email" required>
+          <input type="text" name="website" style="display:none" tabindex="-1" autocomplete="off">
+          <textarea name="message" placeholder="Your message" required></textarea>
+          <button type="submit">Send</button>
+        </form>
+      - {}
+
+  ExampleJs:
+    Description: Example JavaScript
+    Value: !Sub
+      - |
+        document.getElementById('contact-form').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const form = e.target;
+          const data = Object.fromEntries(new FormData(form));
+          const res = await fetch('${Url}', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer ${Token}'
+            },
+            body: JSON.stringify(data)
+          });
+          const result = await res.json();
+          alert(res.ok ? 'Message sent!' : result.error);
+        });
+      - Url: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/submit'
+        Token: !GetAtt Setup.Token
